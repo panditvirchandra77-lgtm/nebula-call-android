@@ -245,6 +245,13 @@ from environment variables, and use it in `buildTypes.release`. Keep `nebula.jks
 
 ---
 
+## 9b. Web version (no APK needed)
+
+`token_server.py` also serves `web/index.html` at `/`: a browser voice call with Sonia
+(LiveKit JS, same speaking detection as the app). Set `LIVEKIT_URL` so the token response
+carries the server URL. Open `https://<host>:8093/` in Chrome. To run it inside the Nebula app,
+see `NEBULA_APP.md`.
+
 ## 10. File map
 
 ```
@@ -256,7 +263,9 @@ app/src/main/java/com/nebula/avatarcall/
   AvatarView.kt                 idle/talk loop player (media3), fallback image
   LkVideo.kt                    renders a LiveKit VideoTrack
 app/src/main/res/xml/network_security_config.xml   allows http:// token URLs
-token_server.py                 FastAPI token endpoint for the app
+token_server.py                 FastAPI token endpoint + serves the web call page
+web/index.html, web/avatar.jpg  browser voice call page
+NEBULA_APP.md                   run the web call as a Nebula App
 .github/workflows/build-apk.yml free cloud build, APK as artifact
 ```
 

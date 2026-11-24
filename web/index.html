@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sonia Call</title>
+<style>
+  :root { --bg:#0b0d14; --fg:#e8ecf7; --muted:#9aa4bf; --accent:#7c5cff; --red:#ff4d5e; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,Roboto,sans-serif; }
+  #stage { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; padding:24px; }
+  #avatarWrap { position:relative; width:min(72vw,320px); aspect-ratio:1; }
+  #avatar { width:100%; height:100%; object-fit:cover; border-radius:50%; transition:transform .08s linear; box-shadow:0 0 0 0 var(--accent); }
+  #remoteVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:24px; display:none; }
+  #ring { position:absolute; inset:-10px; border-radius:50%; border:3px solid var(--accent); opacity:0; transition:opacity .15s; }
+  #name { font-size:22px; font-weight:600; }
+  #status { color:var(--muted); font-size:14px; min-height:1.2em; text-align:center; }
+  #controls { display:flex; gap:16px; margin-top:8px; }
+  button { border:0; border-radius:999px; width:64px; height:64px; font-size:24px; color:#fff; background:#252a3a; }
+  #callBtn { background:#1db954; width:180px; font-size:18px; font-weight:600; }
+  #hangBtn { background:var(--red); }
+  .off { opacity:.45; }
+  #settings { position:fixed; top:10px; right:12px; color:var(--muted); font-size:13px; }
+  #panel { display:none; position:fixed; inset:auto 12px 12px 12px; background:#151a28; border-radius:16px; padding:14px; }
+  #panel label { display:block; font-size:12px; color:var(--muted); margin-top:8px; }
+  #panel input { width:100%; padding:10px; border-radius:10px; border:1px solid #2a3047; background:#0e1220; color:var(--fg); }
+</style>
+</head>
+<body>
+<a id="settings" href="#" onclick="togglePanel();return false;">⚙︎ settings</a>
+<div id="stage">
+  <div id="avatarWrap">
+    <img id="avatar" src="avatar.jpg" alt="Sonia">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <div id="ring"></div>
+  </div>
+  <div id="name">Sonia</div>
+  <div id="status">Tap karke call karo</div>
+  <div id="controls">
+    <button id="callBtn" onclick="startCall()">📞 Call</button>
+    <button id="micBtn" onclick="toggleMic()" style="display:none">🎤</button>
+    <button id="hangBtn" onclick="hangUp()" style="display:none">✖</button>
+  </div>
+</div>
+<div id="panel">
+  <label>LiveKit URL (khali = token server jo de)</label><input id="cfgUrl" placeholder="wss://...">
+  <label>Room</label><input id="cfgRoom">
+  <label>Identity</label><input id="cfgId">
+  <label>Token path</label><input id="cfgTok">
+</div>
+<div id="audioSink" style="display:none"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.25.0/dist/livekit-client.umd.min.js"></script>
+<script>
+const LK = window.LivekitClient;
+const $ = (id) => document.getElementById(id);
+const store = (k, d) => localStorage.getItem('sonia.' + k) ?? d;
+const q = new URLSearchParams(location.search);
+$('cfgUrl').value  = q.get('url')      ?? store('url', '');
+$('cfgRoom').value = q.get('room')     ?? store('room', 'nebula');
+$('cfgId').value   = q.get('identity') ?? store('id', 'jeetu-web');
+$('cfgTok').value  = q.get('token')    ?? store('tok', 'token');
+['cfgUrl','cfgRoom','cfgId','cfgTok'].forEach((id, i) =>
+  $(id).addEventListener('change', e => localStorage.setItem('sonia.' + ['url','room','id','tok'][i], e.target.value)));
+function togglePanel(){ const p=$('panel'); p.style.display = p.style.display==='block' ? 'none' : 'block'; }
+
+let room = null, pollTimer = null, micOn = true;
+const status = (t) => $('status').textContent = t;
+
+async function getToken() {
+  const u = new URL($('cfgTok').value || 'token', location.href);
+  u.searchParams.set('room', $('cfgRoom').value);
+  u.searchParams.set('identity', $('cfgId').value);
+  const r = await fetch(u);
+  const body = await r.text();
+  if (!r.ok) throw new Error('Token server ' + r.status + ': ' + body.slice(0, 200));
+  let j = null; try { j = JSON.parse(body); } catch {}
+  const token = j ? (j.token || j.accessToken || j.participantToken || j.participant_token || j.jwt) : body.trim().replace(/^"|"$/g, '');
+  if (!token) throw new Error("Token JSON mein 'token' nahi mila");
+  const url = $('cfgUrl').value || (j && (j.url || j.serverUrl || j.livekit_url));
+  if (!url) throw new Error('LiveKit URL nahi mila, settings mein daalo');
+  return { token, url };
+}
+
+function pickAgent() {
+  const ps = [...room.remoteParticipants.values()];
+  return ps.find(p => p.kind === LK.ParticipantKind?.AGENT || p.isAgent) || ps[0] || null;
+}
+
+async function startCall() {
+  try {
+    $('callBtn').disabled = true;
+    status('Mic permission…');
+    // Ask mic inside a user gesture (needed on phones / in-app webviews).
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop());
+    status('Token le raha hoon…');
+    const { token, url } = await getToken();
+    room = new LK.Room({ adaptiveStream: true, dynacast: true });
+    room.on(LK.RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === 'audio') { const el = track.attach(); $('audioSink').appendChild(el); el.play().catch(()=>{}); }
+      if (track.kind === 'video') { track.attach($('remoteVideo')); $('remoteVideo').style.display = 'block'; }
+    });
+    room.on(LK.RoomEvent.TrackUnsubscribed, (track) => {
+      track.detach().forEach(el => el.remove?.());
+      if (track.kind === 'video') $('remoteVideo').style.display = 'none';
+    });
+    room.on(LK.RoomEvent.ParticipantConnected, () => status('Sonia live hai'));
+    room.on(LK.RoomEvent.ParticipantDisconnected, () => { if (!pickAgent()) status('Sonia ka intezaar…'); });
+    room.on(LK.RoomEvent.Disconnected, () => endUi('Call khatam'));
+    status('Connect ho raha hoon…');
+    await room.connect(url, token);
+    await room.startAudio().catch(()=>{});
+    await room.localParticipant.setMicrophoneEnabled(true);
+    micOn = true;
+    status(pickAgent() ? 'Sonia live hai' : 'Sonia ka intezaar…');
+    $('callBtn').style.display = 'none'; $('micBtn').style.display = ''; $('hangBtn').style.display = '';
+    startPolling();
+  } catch (e) {
+    console.error(e);
+    status(e.name === 'NotAllowedError' ? 'Mic permission nahi mili. Is app/browser mein mic allow karo.' : String(e.message || e));
+    $('callBtn').disabled = false;
+    if (room) { room.disconnect(); room = null; }
+  }
+}
+
+function startPolling() {
+  let lastLoud = 0;
+  pollTimer = setInterval(() => {
+    const a = room && pickAgent();
+    const lvl = a ? (a.audioLevel || 0) : 0;
+    const now = Date.now();
+    if ((a && a.isSpeaking) || lvl > 0.02) lastLoud = now;
+    const talking = now - lastLoud < 450;
+    $('avatar').style.transform = 'scale(' + (1 + Math.min(lvl, 0.3) * 0.25) + ')';
+    $('ring').style.opacity = talking ? 1 : 0;
+  }, 60);
+}
+
+async function toggleMic() {
+  if (!room) return;
+  micOn = !micOn;
+  await room.localParticipant.setMicrophoneEnabled(micOn);
+  $('micBtn').classList.toggle('off', !micOn);
+}
+
+function hangUp() { if (room) room.disconnect(); endUi('Call khatam'); }
+function endUi(t) {
+  clearInterval(pollTimer); pollTimer = null; room = null;
+  $('audioSink').innerHTML = ''; $('remoteVideo').style.display = 'none';
+  $('avatar').style.transform = ''; $('ring').style.opacity = 0;
+  $('callBtn').style.display = ''; $('callBtn').disabled = false;
+  $('micBtn').style.display = 'none'; $('hangBtn').style.display = 'none';
+  status(t);
+}
+</script>
+</body>
+</html>
