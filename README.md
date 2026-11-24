@@ -133,6 +133,32 @@ If any check fails, do not ship it. Rebuild.
 
 ---
 
+## 5b. Release signing (why updates install in place)
+
+The build uses **one fixed keystore**, supplied through repo secrets:
+
+| Secret | What it holds |
+|---|---|
+| `KEYSTORE_BASE64` | base64 of the `.p12` keystore |
+| `KEYSTORE_PASSWORD` | store password |
+| `KEY_ALIAS` | key alias (`nebula`) |
+| `KEY_PASSWORD` | key password |
+
+Without these, `assembleRelease` falls back to the runner's auto-generated **debug**
+keystore. That keystore is different on every CI run, so every APK gets a **new
+signature** and Android rejects the update with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` — forcing an uninstall + reinstall each time.
+With the secrets set, the signature is stable and `adb install -r` just works.
+
+To regenerate the keystore (only if it is lost — this changes the app identity and
+forces one last uninstall):
+
+```bash
+keytool -genkeypair -v -storetype PKCS12 -keystore nebula-release.p12 -alias nebula \
+  -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Nebula Call, O=Nebula, C=IN"
+base64 -w0 nebula-release.p12   # paste into the KEYSTORE_BASE64 secret
+```
+
 ## 6. Install on the phone
 
 ### Easiest: adb over USB (gives real error messages)
@@ -164,15 +190,17 @@ More detail: `adb logcat -d | grep -iE "PackageManager|PackageInstaller|INSTALL_
 
 On first open the settings screen asks for:
 
-| Field | Example | Notes |
+All fields ship with working defaults, so a fresh install connects with no typing:
+
+| Field | Default | Notes |
 |---|---|---|
-| LiveKit URL | `wss://your-host.ts.net` | `wss://` or `ws://` |
-| Token URL | `http://your-host:8093/token` | app calls `GET <url>?room=<room>&identity=<identity>` |
-| Manual token | (optional) | paste a JWT instead of using a token server |
+| LiveKit URL | `wss://nebula-claw.tailed4b62.ts.net:8445` | **The port is required.** A bare `wss://host` hits the OpenClaw Control UI on :443 and the call never connects. |
+| Token URL | `https://nebula-claw.tailed4b62.ts.net:8447/token` | app calls `GET <url>?room=<room>&identity=<identity>` |
+| Manual token | (empty) | paste a JWT instead of using a token server |
 | Room | `nebula` | |
 | Identity | `jeetu-phone` | |
-| Avatar idle loop .mp4 URL | (optional) | looped while agent is silent |
-| Avatar talk loop .mp4 URL | (optional) | looped while agent speaks |
+| Avatar idle loop .mp4 URL | `https://nebula-claw.tailed4b62.ts.net:8090/avatar/idle.mp4` | looped while agent is silent |
+| Avatar talk loop .mp4 URL | `https://nebula-claw.tailed4b62.ts.net:8090/avatar/talk_a.mp4` | looped while agent speaks |
 
 Allow mic + camera when asked, then tap Call.
 

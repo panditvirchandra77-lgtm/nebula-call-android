@@ -19,6 +19,27 @@ jobs:
           yes | $SDKM --licenses > /dev/null || true
           $SDKM "platforms;android-35" "build-tools;35.0.0" "platform-tools"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
+      - name: Decode signing keystore
+        # One fixed keystore => every build keeps the same signature, so a new APK
+        # installs OVER the old one instead of forcing an uninstall every time.
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KS_KEY_PW: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::KEYSTORE_BASE64 secret missing - falling back to the debug key."
+            exit 0
+          fi
+          printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/nebula.p12"
+          {
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/nebula.p12"
+            echo "KEYSTORE_PASSWORD=$KS_PW"
+            echo "KEY_ALIAS=$KS_ALIAS"
+            echo "KEY_PASSWORD=$KS_KEY_PW"
+          } >> "$GITHUB_ENV"
+
       - name: Build release APK
         run: |
           chmod +x gradlew

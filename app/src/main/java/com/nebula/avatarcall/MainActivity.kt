@@ -85,13 +85,16 @@ private object Prefs {
     fun load(c: Context): CallConfig {
         val p = c.getSharedPreferences(NAME, Context.MODE_PRIVATE)
         return CallConfig(
-            serverUrl = p.getString("server", "wss://nebula-claw.tailed4b62.ts.net")!!,
-            tokenUrl = p.getString("tokenUrl", "")!!,
+            // BUG FIX: bare wss://<host> hits the OpenClaw Control UI on :443, not
+            // LiveKit (which listens on :8445). The old default made every fresh
+            // install fail to connect until the user typed the port by hand.
+            serverUrl = p.getString("server", "wss://nebula-claw.tailed4b62.ts.net:8445")!!,
+            tokenUrl = p.getString("tokenUrl", "https://nebula-claw.tailed4b62.ts.net:8447/token")!!,
             manualToken = p.getString("manualToken", "")!!,
             roomName = p.getString("room", "nebula")!!,
             identity = p.getString("identity", "jeetu-phone")!!,
-            idleVideoUrl = p.getString("idle", "")!!,
-            talkVideoUrl = p.getString("talk", "")!!,
+            idleVideoUrl = p.getString("idle", "https://nebula-claw.tailed4b62.ts.net:8090/avatar/idle.mp4")!!,
+            talkVideoUrl = p.getString("talk", "https://nebula-claw.tailed4b62.ts.net:8090/avatar/talk_a.mp4")!!,
         )
     }
     fun save(c: Context, cfg: CallConfig) {
