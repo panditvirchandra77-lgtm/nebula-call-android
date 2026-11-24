@@ -1,0 +1,29 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+      - name: Verify APK
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          $ANDROID_HOME/build-tools/35.0.0/aapt2 dump badging "$APK" | grep -E "package:|sdkVersion|targetSdkVersion|native-code"
+          $ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs "$APK" | head -3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NebulaCall-apk
+          path: app/build/outputs/apk/release/app-release.apk
